@@ -37,24 +37,6 @@ impl From<csv::Error> for Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-// #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
-// #[serde(rename_all = "lowercase")]
-// enum TransactionType {
-//     Deposit,
-//     Withdrawal,
-//     Dispute,
-//     Resolve,
-//     Chargeback,
-// }
-
-// #[derive(Debug, Deserialize, PartialEq, Eq)]
-// struct Transaction {
-//     transaction_type: TransactionType,
-//     client: u16,
-//     tx: u32,
-//     amount: Option<Decimal>,
-// }
-
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 pub struct TransactionData {
     client: u16,
@@ -84,20 +66,27 @@ impl Transaction {
             .get(0)
             .ok_or_else(|| Error::InvalidRecordType("".to_owned()))?;
 
-        match record_type {
-            "deposit" => Ok(Transaction::Deposit(record.deserialize(Some(header))?)),
-            "withdrawal" => Ok(Transaction::Withdrawal(record.deserialize(Some(header))?)),
-            "dispute" => Ok(Transaction::Dispute(record.deserialize(Some(header))?)),
-            "resolve" => Ok(Transaction::Resolve(record.deserialize(Some(header))?)),
-            "chargeback" => Ok(Transaction::Chargeback(record.deserialize(Some(header))?)),
-            other => Err(Error::InvalidRecordType(other.to_owned())),
+        let mut transaction = match record_type {
+            "deposit" => Transaction::Deposit(record.deserialize(Some(header))?),
+            "withdrawal" => Transaction::Withdrawal(record.deserialize(Some(header))?),
+            "dispute" => Transaction::Dispute(record.deserialize(Some(header))?),
+            "resolve" => Transaction::Resolve(record.deserialize(Some(header))?),
+            "chargeback" => Transaction::Chargeback(record.deserialize(Some(header))?),
+            other => return Err(Error::InvalidRecordType(other.to_owned())),
+        };
+
+        // Cap amount precision at 4 decimals
+        if let Some(amount) = transaction.amount_mut() {
+            *amount = amount.round_dp_with_strategy(4, rust_decimal::RoundingStrategy::ToZero);
         }
+
+        Ok(transaction)
     }
     /// Will return the amount field in the transaction if the transaction is either a deposit or a
     /// withdrawal, will return None otherwise.
-    pub fn amount_mut(&mut self) -> Option<Decimal> {
+    pub fn amount_mut(&mut self) -> Option<&mut Decimal> {
         match self {
-            Self::Deposit(data) | Self::Withdrawal(data) => Some(data.amount),
+            Self::Deposit(data) | Self::Withdrawal(data) => Some(&mut data.amount),
             _ => None,
         }
     }
@@ -167,6 +156,7 @@ mod test {
     use super::*;
     use rust_decimal_macros::dec;
 
+    /// Test deserialization of all tranaction types
     #[test]
     fn successfully_serialize_test() {
         let input = r#"
@@ -221,15 +211,35 @@ mod test {
         }
     }
 
+    /// Test handling of bad header
     #[test]
     fn errornous_header_test() {
         let input = r#"
             type, tx, client, amount
-            deposit, 1, 1, 1.0
+            deposit, 1, 1, 1.0,
         "#;
 
         let reader_result = TransactionIterator::from_reader(std::io::Cursor::new(input));
 
         assert!(matches!(reader_result, Err(Error::InvalidHeader(_))))
+    }
+
+    /// Test handling of input with overly precise amount input
+    #[test]
+    fn too_high_precision() {
+        let input = r#"
+            type, client, tx, amount
+            deposit, 1, 1, 1.12345
+        "#;
+
+        let mut transaction_iter =
+            TransactionIterator::from_reader(std::io::Cursor::new(input)).unwrap();
+
+        match transaction_iter.next() {
+            Some(Ok(Transaction::Deposit(TransactionAmountData { amount, .. }))) => {
+                assert_eq!(amount, dec!(1.1234))
+            }
+            other => panic!("Unexpected transaction type: {:#?}", other),
+        }
     }
 }
