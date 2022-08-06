@@ -226,7 +226,7 @@ mod test {
 
     /// Test handling of input with overly precise amount input
     #[test]
-    fn too_high_precision() {
+    fn too_high_precision_test() {
         let input = r#"
             type, client, tx, amount
             deposit, 1, 1, 1.12345
@@ -238,6 +238,25 @@ mod test {
         match transaction_iter.next() {
             Some(Ok(Transaction::Deposit(TransactionAmountData { amount, .. }))) => {
                 assert_eq!(amount, dec!(1.1234))
+            }
+            other => panic!("Unexpected transaction type: {:#?}", other),
+        }
+    }
+
+    /// Test handling of input with low precision amount input
+    #[test]
+    fn low_precision_test() {
+        let input = r#"
+            type, client, tx, amount
+            deposit, 1, 1, 1.1
+        "#;
+
+        let mut transaction_iter =
+            TransactionIterator::from_reader(std::io::Cursor::new(input)).unwrap();
+
+        match transaction_iter.next() {
+            Some(Ok(Transaction::Deposit(TransactionAmountData { amount, .. }))) => {
+                assert_eq!(amount, dec!(1.1000))
             }
             other => panic!("Unexpected transaction type: {:#?}", other),
         }
