@@ -1,20 +1,8 @@
 use std::io;
 
+use super::{Error, Result};
 use rust_decimal::Decimal;
 use serde::Deserialize;
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("IO Error: {0}")]
-    IO(#[from] io::Error),
-    #[error("Failed to read input data: {0}")]
-    CSV(csv::Error),
-    #[error("Invalid record type: {0}")]
-    InvalidRecordType(String),
-    #[error("Incorrect csv header: {0:?}")]
-    InvalidHeader(csv::StringRecord),
-}
 
 // We implement From csv::Error to Error manually so if the underlying error is an IO error we will
 // unpack the IO error and place it in the Error::IO variant in our Error enum.
@@ -35,15 +23,13 @@ impl From<csv::Error> for Error {
     }
 }
 
-type Result<T> = std::result::Result<T, Error>;
-
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct TransactionData {
     pub client: u16,
     pub tx: u32,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct TransactionAmountData {
     pub client: u16,
     pub tx: u32,
