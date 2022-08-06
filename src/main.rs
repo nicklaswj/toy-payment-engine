@@ -1,18 +1,19 @@
 use std::io;
 
-use csv::StringRecord;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-enum Error {
+pub enum Error {
     #[error("IO Error: {0}")]
     IO(#[from] io::Error),
     #[error("Failed to read input data: {0}")]
     CSV(csv::Error),
+    #[error("Invalid record type: {0}")]
+    InvalidRecordType(String),
     #[error("Incorrect csv header: {0:?}")]
-    IncorrectHeader(StringRecord),
+    InvalidHeader(csv::StringRecord),
 }
 
 // We implement From csv::Error to Error manually so if the underlying error is an IO error we will
@@ -36,27 +37,76 @@ impl From<csv::Error> for Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-enum TransactionType {
-    Deposit,
-    Withdrawal,
-    Dispute,
-    Resolve,
-    Chargeback,
+// #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+// #[serde(rename_all = "lowercase")]
+// enum TransactionType {
+//     Deposit,
+//     Withdrawal,
+//     Dispute,
+//     Resolve,
+//     Chargeback,
+// }
+
+// #[derive(Debug, Deserialize, PartialEq, Eq)]
+// struct Transaction {
+//     transaction_type: TransactionType,
+//     client: u16,
+//     tx: u32,
+//     amount: Option<Decimal>,
+// }
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+pub struct TransactionData {
+    client: u16,
+    tx: u32,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
-struct Transaction {
-    transaction_type: TransactionType,
+pub struct TransactionAmountData {
     client: u16,
     tx: u32,
-    amount: Option<Decimal>,
+    amount: Decimal,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Transaction {
+    Deposit(TransactionAmountData),
+    Withdrawal(TransactionAmountData),
+    Dispute(TransactionData),
+    Resolve(TransactionData),
+    Chargeback(TransactionData),
+}
+
+impl Transaction {
+    pub fn from_record(record: &csv::StringRecord, header: &csv::StringRecord) -> Result<Self> {
+        // Get header type
+        let record_type = record
+            .get(0)
+            .ok_or_else(|| Error::InvalidRecordType("".to_owned()))?;
+
+        match record_type {
+            "deposit" => Ok(Transaction::Deposit(record.deserialize(Some(header))?)),
+            "withdrawal" => Ok(Transaction::Withdrawal(record.deserialize(Some(header))?)),
+            "dispute" => Ok(Transaction::Dispute(record.deserialize(Some(header))?)),
+            "resolve" => Ok(Transaction::Resolve(record.deserialize(Some(header))?)),
+            "chargeback" => Ok(Transaction::Chargeback(record.deserialize(Some(header))?)),
+            other => Err(Error::InvalidRecordType(other.to_owned())),
+        }
+    }
+    /// Will return the amount field in the transaction if the transaction is either a deposit or a
+    /// withdrawal, will return None otherwise.
+    pub fn amount_mut(&mut self) -> Option<Decimal> {
+        match self {
+            Self::Deposit(data) | Self::Withdrawal(data) => Some(data.amount),
+            _ => None,
+        }
+    }
 }
 
 struct TransactionIterator<R: io::Read> {
     // Inner csv reader
     reader: csv::Reader<R>,
+    csv_header: csv::StringRecord,
     // scratch record to avoid allocation of SringRecord per call to <Self as Iterator>::next
     scratch_record: csv::StringRecord,
 }
@@ -71,24 +121,11 @@ impl<R: io::Read> Iterator for TransactionIterator<R> {
             Ok(true) => {
                 // Trim all record fields for whitespaces
                 self.scratch_record.trim();
-                Some(
-                    self.scratch_record
-                        .deserialize::<'_, Transaction>(None)
-                        .map_err(Error::from)
-                        .map(|record| {
-                            // Per the documentation the amount field has a max precision of four decimals. So
-                            // if we get an input amount with higher precision than four we will assume it's an
-                            // error and round it down, i.e. basically cut off the rest of the decimals.
-                            record.amount.map(|amount| {
-                                amount.round_dp_with_strategy(
-                                    4,
-                                    rust_decimal::RoundingStrategy::ToZero,
-                                )
-                            });
 
-                            record
-                        }),
-                )
+                Some(Transaction::from_record(
+                    &self.scratch_record,
+                    &self.csv_header,
+                ))
             }
             // Reached EOF
             Ok(false) => None,
@@ -107,15 +144,16 @@ impl<R: io::Read> TransactionIterator<R> {
     pub fn from_reader(reader: R) -> Result<Self> {
         let mut reader = csv::Reader::from_reader(reader);
 
-        let mut headers = reader.headers()?.to_owned();
-        headers.trim();
-        if &headers == Self::EXPECTED_HEADER {
+        let mut csv_header = reader.headers()?.to_owned();
+        csv_header.trim();
+        if &csv_header == Self::EXPECTED_HEADER {
             Ok(Self {
                 reader,
+                csv_header,
                 scratch_record: Default::default(),
             })
         } else {
-            Err(Error::IncorrectHeader(headers.to_owned()))
+            Err(Error::InvalidHeader(csv_header.to_owned()))
         }
     }
 }
@@ -138,39 +176,40 @@ mod test {
             deposit, 1, 3, 2.0
             withdrawal, 1, 4, 1.5
             withdrawal, 2, 5, 3.0
+            dispute, 1, 1,
+            resolve, 2, 2,
+            chargeback, 3, 3,
         "#;
 
         let expected_result = [
-            Transaction {
-                transaction_type: TransactionType::Deposit,
+            Transaction::Deposit(TransactionAmountData {
                 client: 1,
                 tx: 1,
-                amount: Some(dec!(1.0)),
-            },
-            Transaction {
-                transaction_type: TransactionType::Deposit,
+                amount: dec!(1.0),
+            }),
+            Transaction::Deposit(TransactionAmountData {
                 client: 2,
                 tx: 2,
-                amount: Some(dec!(2.0)),
-            },
-            Transaction {
-                transaction_type: TransactionType::Deposit,
+                amount: dec!(2.0),
+            }),
+            Transaction::Deposit(TransactionAmountData {
                 client: 1,
                 tx: 3,
-                amount: Some(dec!(2.0)),
-            },
-            Transaction {
-                transaction_type: TransactionType::Withdrawal,
+                amount: dec!(2.0),
+            }),
+            Transaction::Withdrawal(TransactionAmountData {
                 client: 1,
                 tx: 4,
-                amount: Some(dec!(1.5)),
-            },
-            Transaction {
-                transaction_type: TransactionType::Withdrawal,
+                amount: dec!(1.5),
+            }),
+            Transaction::Withdrawal(TransactionAmountData {
                 client: 2,
                 tx: 5,
-                amount: Some(dec!(3.0)),
-            },
+                amount: dec!(3.0),
+            }),
+            Transaction::Dispute(TransactionData { client: 1, tx: 1 }),
+            Transaction::Resolve(TransactionData { client: 2, tx: 2 }),
+            Transaction::Chargeback(TransactionData { client: 3, tx: 3 }),
         ];
 
         // Create transaction reader
@@ -191,6 +230,6 @@ mod test {
 
         let reader_result = TransactionIterator::from_reader(std::io::Cursor::new(input));
 
-        assert!(matches!(reader_result, Err(Error::IncorrectHeader(_))))
+        assert!(matches!(reader_result, Err(Error::InvalidHeader(_))))
     }
 }
