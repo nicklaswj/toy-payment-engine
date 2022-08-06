@@ -39,15 +39,15 @@ type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 pub struct TransactionData {
-    client: u16,
-    tx: u32,
+    pub client: u16,
+    pub tx: u32,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 pub struct TransactionAmountData {
-    client: u16,
-    tx: u32,
-    amount: Decimal,
+    pub client: u16,
+    pub tx: u32,
+    pub amount: Decimal,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -82,12 +82,32 @@ impl Transaction {
 
         Ok(transaction)
     }
-    /// Will return the amount field in the transaction if the transaction is either a deposit or a
+    /// Will return a mutable reference to the amount field in the transaction if the transaction is either a deposit or a
     /// withdrawal, will return None otherwise.
     pub fn amount_mut(&mut self) -> Option<&mut Decimal> {
         match self {
             Self::Deposit(data) | Self::Withdrawal(data) => Some(&mut data.amount),
             _ => None,
+        }
+    }
+
+    /// Returns the client id associated with the transaction
+    pub fn client_id(&self) -> u16 {
+        match self {
+            Transaction::Deposit(data) | Transaction::Withdrawal(data) => data.client,
+            Transaction::Dispute(data)
+            | Transaction::Resolve(data)
+            | Transaction::Chargeback(data) => data.client,
+        }
+    }
+
+    /// Returns the transaction id associated with the transaction
+    pub fn transaction_id(&self) -> u32 {
+        match self {
+            Transaction::Deposit(data) | Transaction::Withdrawal(data) => data.tx,
+            Transaction::Dispute(data)
+            | Transaction::Resolve(data)
+            | Transaction::Chargeback(data) => data.tx,
         }
     }
 }
