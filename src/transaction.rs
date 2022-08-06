@@ -86,19 +86,9 @@ impl Transaction {
             | Transaction::Chargeback(data) => data.client,
         }
     }
-
-    /// Returns the transaction id associated with the transaction
-    pub fn transaction_id(&self) -> u32 {
-        match self {
-            Transaction::Deposit(data) | Transaction::Withdrawal(data) => data.tx,
-            Transaction::Dispute(data)
-            | Transaction::Resolve(data)
-            | Transaction::Chargeback(data) => data.tx,
-        }
-    }
 }
 
-struct TransactionIterator<R: io::Read> {
+pub struct TransactionIterator<R: io::Read> {
     // Inner csv reader
     reader: csv::Reader<R>,
     csv_header: csv::StringRecord,
