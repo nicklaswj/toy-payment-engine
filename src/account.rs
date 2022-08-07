@@ -314,9 +314,8 @@ mod test {
 
         bank.chargeback(ALICE, deposit_tx);
 
-        assert_eq!(
-            bank.bank.accounts.get(&ALICE).unwrap().available,
-            dec!(10.0)
-        );
+        let account = bank.bank.accounts.get(&ALICE).unwrap();
+        assert_eq!(account.available, dec!(10.0));
+        assert!(account.locked);
     }
 }
